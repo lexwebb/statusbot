@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "typescript-tools": {
+      "command": "/Users/lex/.claude/statusbot/ts-tools",
+      "args": []
+    }
+  }
+}

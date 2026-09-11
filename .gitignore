@@ -1,0 +1,8 @@
+# Runtime state, logs, cursors, user cache — machine-local, some has Slack data.
+state/
+# Bare clones of the org's PRIVATE repos — never push these.
+repos/
+# Throwaway PR/issue checkouts.
+wt/
+# Local MCP binary.
+ts-tools

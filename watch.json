@@ -1,0 +1,15 @@
+{
+  "_comment": "Channels lex_bot watches for raised issues + questions. It must be a MEMBER of each — chat:write.public lets it POST to a channel it hasn't joined, but reading history needs membership (a non-member read returns not_in_channel). To add a channel: /invite @lex_bot (user id U0ATYFBQULW) in Slack, then add {id,name} below (or run: users.conversations to list current membership). The notify channel (lex-notifications) is deliberately absent — it is Lex's private output, never watched. Private channels can only be joined by invite. DMs are always watched — no config. Per-conversation last-seen ts lives in state/slack-seen/, not here, so this file stays hand-editable.",
+  "botUserId": "U0ATYFBQULW",
+  "notifyChannelId": "C0B68775U64",
+  "channels": [
+    { "id": "C059SBTHSNQ", "name": "frontend" },
+    { "id": "C076BAZLE20", "name": "web-app-team" },
+    { "id": "C0AU3NDPVMF", "name": "backend-pr-reviews" },
+    { "id": "C0AP3Q47U2U", "name": "feature-groceries" },
+    { "id": "C0AN42L0LA1", "name": "feature-ai-chat-bot" },
+    { "id": "C0ASB0U5Z19", "name": "feature-mobile-apps" },
+    { "id": "C0BHUGZ6PU2", "name": "feature-native-ios-app" },
+    { "id": "C0BT5941FT4", "name": "feature-medical" }
+  ]
+}
