@@ -1,0 +1,35 @@
+{
+  "_comment": "Copy this file to config.json (which is gitignored) and fill in your own values. config.json is the single source of all instance-specific config — token, org, channels, users, watch list, repos. IDs are Slack channel/user IDs (C… / U…). See README.md for how to obtain each.",
+
+  "botToken": "xoxb-REPLACE-WITH-YOUR-SLACK-BOT-TOKEN",
+  "githubOrg": "your-github-org",
+  "githubUser": "your-github-login",
+  "ownerName": "Your Name",
+  "botUserId": "U0000000000",
+
+  "notifyChannel": "C0000000000",
+  "notifyUserId": "U0000000000",
+  "defaultChannel": "C0000000000",
+
+  "botLogins": ["coderabbitai", "github-actions", "dependabot", "renovate", "copilot-pull-request-reviewer"],
+
+  "default": "C0000000000",
+  "fallback": "C0000000000",
+  "channels": {
+    "team-general": { "id": "C0000000000", "for": "DEFAULT. Anything without a clear feature home. Use when in doubt." },
+    "feature-x":     { "id": "C0000000001", "for": "Work on feature X in any repo." }
+  },
+
+  "users": {
+    "some-github-login": "U0000000000"
+  },
+
+  "watch": [
+    { "id": "C0000000000", "name": "team-general" }
+  ],
+
+  "repos": [
+    { "name": "your-repo",       "for": "what this repo is, so the classifier can route an issue to it" },
+    { "name": "your-other-repo", "for": "…" }
+  ]
+}

@@ -7,8 +7,9 @@ set -uo pipefail
 SINCE="${1:-$(( $(date +%s) - 1800 ))}"
 MODE="${2:-normal}"
 NOW=$(date +%s)
-ORG="chaching-engineering"
-ME="lexwebb"
+CONFIG="${HOME}/.claude/statusbot/config.json"   # single source of instance config
+ORG=$(jq -r '.githubOrg' "$CONFIG" 2>/dev/null)
+ME=$(jq -r '.githubUser' "$CONFIG" 2>/dev/null)
 
 # A PR with no activity for this long is dead, not queued — drop it.
 # Measured on updatedAt, so an old PR that got a push yesterday still shows.
@@ -16,8 +17,8 @@ ME="lexwebb"
 STALE_DAYS=14
 STALE_BEFORE=$(( $(date +%s) - STALE_DAYS * 86400 ))
 
-# ponytail: literal bot list; add names as new review bots show up.
-BOTS='^(coderabbitai|linear-code|github-actions|claude|copilot-pull-request-reviewer|Copilot|vercel|sentry-io|dependabot|renovate|chachingme)(\[bot\])?$'
+# Bot authors to skip, from config.botLogins (edit config, not this script).
+BOTS="^($(jq -r '.botLogins | join("|")' "$CONFIG" 2>/dev/null))(\\[bot\\])?\$"
 
 SRC_DIR="${HOME}/src"
 PROJECTS_DIR="${HOME}/.claude/projects"
@@ -77,7 +78,7 @@ for f in "$PROJECTS_DIR"/*/*.jsonl; do
 
   echo "--- $project :: $(basename "$f" .jsonl)"
   echo "  idle: $(mins_ago "$mtime") min (last activity $(iso "$mtime"))"
-  echo "  last prompt from Lex: ${last_prompt:-<none>}"
+  echo "  last prompt from the owner: ${last_prompt:-<none>}"
   echo "  tail of last reply: ${last_reply:-<none>}"
 done
 
@@ -173,13 +174,13 @@ else
   \(.url)"))
       + [ "(listed \($show | length) actionable PR(s), newest opened first — this is the COMPLETE queue, show every one.
 \($nstale) further PR(s) need review but are stale — no activity in over \($days) days — and were dropped.
-\($nengaged) other open PR(s) already have human engagement, are drafts, or are Lex'"'"'s own with no feedback yet.)" ]
+\($nengaged) other open PR(s) already have human engagement, are drafts, or are the owner'"'"'s own with no feedback yet.)" ]
     | .[]
   ' "$ALLPRS"
 fi
 
 # ---------------------------------------------------------- auto reviews ----
-# What review.sh posted to GitHub as Lex inside this window. Epoch-stamped so
+# What review.sh posted to GitHub as the owner inside this window. Epoch-stamped so
 # the slice is a plain filter — nothing to drain, no race with a concurrent pass.
 echo
 echo "=== AUTOMATED PR REVIEWS POSTED AS LEX IN WINDOW ==="

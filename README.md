@@ -1,0 +1,72 @@
+# statusbot
+
+Three cooperating cron-style jobs that use the Claude CLI to keep one person on
+top of their team's GitHub + Slack, and to act on their behalf. Each is a plain
+bash script scheduled by a macOS launchd agent; all instance-specific settings
+live in a single gitignored `config.json`.
+
+| Script | Schedule | What it does |
+|--------|----------|--------------|
+| `run.sh` | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state (`collect.sh`), has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
+| `review.sh` | every 30 min (offset), 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a Slack write-up routed by workstream. Keyed by head SHA: one review per push. |
+| `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** as the bot (mentions/DMs/questions), or **flag** a code-related issue — investigating it against the repo with a `claude -p` sub-agent and posting the findings to your notify channel. |
+
+`collect.sh` is a helper for `run.sh` (prints a plain-text state bundle). The
+`*-prompt.md` files are the system prompts; they use `{{OWNER}}` / `{{GITHUB_USER}}`
+placeholders that the scripts fill from config at runtime.
+
+## Requirements
+
+- macOS (launchd; the scripts use BSD `date -v`). `bash`, `jq`, `perl`, `git`,
+  `curl`, and the GitHub `gh` CLI (authenticated: `gh auth login`).
+- The **Claude CLI** (`claude`), logged in — this is what does the reasoning.
+- A **Slack app / bot** in your workspace with a bot token (`xoxb-…`).
+
+### Slack bot scopes
+
+`chat:write`, `chat:write.public`, `channels:history`, `groups:history`,
+`im:history`, `im:read`, `users:read`, `app_mentions:read`, `channels:read`,
+`groups:read`. To *read* a channel the bot must be a **member** of it
+(`/invite @your-bot`); `chat:write.public` only covers posting.
+
+## Setup
+
+1. `cp config.example.json config.json` and fill it in (it's gitignored). See
+   the field notes below.
+2. Invite the bot to every channel you list under `watch` and to any channel in
+   the review routing `channels` map.
+3. Edit the three `me.lex.claude-*.plist` files (label + script paths + the
+   `PATH` line, which is pinned to a Node install) for your machine, copy them
+   to `~/Library/LaunchAgents/`, and `launchctl load` each.
+4. Smoke-test before scheduling: `./run.sh --dry-run`,
+   `./review.sh --dry-run --pr owner-repo#123`, `./slack-watch.sh --dry-run`.
+
+### config.json fields
+
+| Field | Meaning |
+|-------|---------|
+| `botToken` | Slack bot token (`xoxb-…`). |
+| `githubOrg` | GitHub org the review + investigate passes operate on. |
+| `githubUser` | Your GitHub login — PRs by you are skipped; reviews post as you. |
+| `ownerName` | Your name, injected into prompts (`{{OWNER}}`). |
+| `botUserId` | The bot's Slack user id (`U…`) — used to ignore its own messages. |
+| `notifyChannel` / `notifyUserId` | Where digests + issue flags go, and who to @. |
+| `defaultChannel` | Fallback channel for `collect.sh` context. |
+| `botLogins` | GitHub logins treated as bots and skipped by the review pass. |
+| `default` / `fallback` / `channels` | PR-review Slack routing (by workstream). |
+| `users` | GitHub login → Slack user id, for @-mentions in write-ups. |
+| `watch` | `[{id,name}]` channels `slack-watch.sh` monitors (bot must be a member). |
+| `repos` | `[{name,for}]` the classifier can route an issue to and investigate. |
+
+## State & safety
+
+- Runtime state lives in `state/` (gitignored): per-conversation cursors, seen
+  SHAs, Slack thread anchors, logs, a bare-clone cache in `repos/`, and
+  throwaway worktrees in `wt/`.
+- `slack-watch.sh` seeds a conversation's cursor at "now" on first sighting, so
+  it never replies to backlog; it skips the bot's own messages (no loops) and
+  caps replies + investigations per pass. Replies are **auto-sent** as the bot.
+- All three run one-at-a-time via a `mkdir` lock and only during working hours.
+
+Tune caps/models/hours via the constants at the top of each script (or the
+`REVIEW_MODEL` / `SLACK_WATCH_MODEL` / `SLACK_INVESTIGATE_MODEL` env vars).

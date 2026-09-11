@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# review.sh — automated PR review pass. Sibling to run.sh: run.sh talks to Lex,
+# review.sh — automated PR review pass. Sibling to run.sh: run.sh talks to the owner,
 # review.sh talks to the org's PRs.
 #
-# Every open PR in the org that isn't Lex's and that no human has looked at gets
+# Every open PR in the org that isn't the owner's and that no human has looked at gets
 # its head SHA checked out into a throwaway worktree and handed to a `claude -p`
-# sub-agent, which posts the review to GitHub as lexwebb. State is keyed by head
+# sub-agent, which posts the review to GitHub as the owner (config githubUser). State is keyed by head
 # SHA: a PR is reviewed once per push, and re-reviewed when the author pushes
 # again. Scheduled by ~/Library/LaunchAgents/me.lex.claude-review.plist.
 #
@@ -27,21 +27,25 @@ LEDGER="$STATE/reviews.log"      # append-only, epoch-stamped; collect.sh reads
 REPOS="$DIR/repos"               # bare clone cache, kept between runs
 WORKTREES="$DIR/wt"              # throwaway checkouts, deleted after each review
 
-ROUTING="$DIR/slack-routing.json"   # channel menu + github→slack user map
-SLACK_CONFIG="$DIR/config.json"
+SLACK_CONFIG="$DIR/config.json"     # all instance config: token, org, routing, users
+ROUTING="$SLACK_CONFIG"             # .channels menu + .users github→slack map live here too
 
-ORG="chaching-engineering"
-ME="lexwebb"
+# Instance-specific values come from config.json so this repo can be cloned.
+ORG=$(jq -r '.githubOrg' "$SLACK_CONFIG" 2>/dev/null)
+ME=$(jq -r '.githubUser' "$SLACK_CONFIG" 2>/dev/null)
+OWNER=$(jq -r '.ownerName // "the owner"' "$SLACK_CONFIG" 2>/dev/null)
 MODEL="${REVIEW_MODEL:-opus}"
+# Inject config values into a prompt template's {{OWNER}} / {{GITHUB_USER}} slots.
+prompt_file() { OWNER="$OWNER" GHUSER="$ME" perl -pe 's/\{\{OWNER\}\}/$ENV{OWNER}/g; s/\{\{GITHUB_USER\}\}/$ENV{GHUSER}/g' "$1"; }
 
 MAX_PARALLEL=3        # sub-agents at once
 MAX_PER_RUN=4         # reviews per pass — a cap on cost and on how much of
-                      # Lex's name lands on the org's PRs in one go
+                      # the owner's name lands on the org's PRs in one go
 BUDGET_USD=2          # per sub-agent
 STALE_DAYS=14         # same cutoff collect.sh uses: an untouched PR is dead
 
-# ponytail: literal bot list, kept in sync with collect.sh by hand.
-BOTS='^(coderabbitai|linear-code|github-actions|claude|copilot-pull-request-reviewer|Copilot|vercel|sentry-io|dependabot|renovate|chachingme)(\[bot\])?$'
+# Bot authors to skip, built from config.botLogins.
+BOTS="^($(jq -r '.botLogins | join("|")' "$SLACK_CONFIG" 2>/dev/null))(\\[bot\\])?\$"
 
 DRY_RUN=0
 ONLY=""
@@ -78,7 +82,7 @@ NOW=$(date +%s)
 STALE_BEFORE=$(( NOW - STALE_DAYS * 86400 ))
 
 # Same working-day window as run.sh. A review lands in someone's notifications
-# under Lex's name; 4am is the wrong time for that, and it can wait for 9.
+# under the owner's name; 4am is the wrong time for that, and it can wait for 9.
 # A manual --pr or --dry-run ignores the window.
 HOUR=$(date +%H); HOUR=${HOUR#0}
 if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt 9 ] || [ "$HOUR" -ge 18 ]; }; then
@@ -129,7 +133,7 @@ slack_post() {
 
   # Chosen channel, then the default, then the fallback — deduped, in order. A
   # write-up is never lost to a routing mistake or a channel the bot can't reach;
-  # the default is private, so until @Lex Bot is invited every post lands on the
+  # the default is private, so until the bot is invited every post lands on the
   # fallback and the log says which channel it was meant for.
   candidates=$(jq -r --arg n "$channel_name" \
     '[.channels[$n].id, .default, .fallback] | map(select(. != null))
@@ -171,7 +175,7 @@ slack_post() {
 
     err=$(printf '%s' "$resp" | jq -r '.error // .' 2>/dev/null)
     if [ "$err" = "not_in_channel" ] || [ "$err" = "channel_not_found" ]; then
-      log "$slug: bot cannot post to $channel ($err) — invite @Lex Bot; trying next channel"
+      log "$slug: bot cannot post to $channel ($err) — invite the bot; trying next channel"
       continue
     fi
     log "$slug: slack error on $channel: $err"
@@ -245,7 +249,7 @@ Open the Slack write-up with the author's mention exactly as given above.
 Slack channels for the write-up, routed by the PR's subject, not its repo.
 Copy one name verbatim — an invented name falls back to the default:
 $menu" \
-    --append-system-prompt "$(cat "$DIR/review-prompt.md")" \
+    --append-system-prompt "$(prompt_file "$DIR/review-prompt.md")" \
     --model "$MODEL" \
     --allowed-tools 'Bash,Read,Grep,Glob' \
     --disallowed-tools 'Edit,Write,NotebookEdit' \
@@ -331,7 +335,7 @@ while read -r repo num; do
   title=$(printf '%s' "$meta" | jq -r '.title')
   updated=$(printf '%s' "$meta" | jq -r '.updatedAt | fromdate')
 
-  # Never review Lex's own work, a draft, or another bot's PR.
+  # Never review the owner's own work, a draft, or another bot's PR.
   [ "$author" = "$ME" ] && continue
   [ "$draft" = "true" ] && continue
   printf '%s' "$author" | grep -qiE "$BOTS" && continue

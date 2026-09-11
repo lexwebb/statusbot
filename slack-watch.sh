@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# slack-watch.sh — third sibling to run.sh (talks to Lex) and review.sh (talks
+# slack-watch.sh — third sibling to run.sh (talks to the owner) and review.sh (talks
 # to the org's PRs). This one watches Slack: it reads new messages in the
-# watched channels + the bot's DMs and, per message, either replies as lex_bot,
-# or flags a code-related issue to Lex after investigating it against the repo.
+# watched channels + the bot's DMs and, per message, either replies as the bot,
+# or flags a code-related issue to the owner after investigating it against the repo.
 #
 # Scheduled by ~/Library/LaunchAgents/me.lex.claude-slack-watch.plist.
 #
@@ -18,14 +18,12 @@ LOG="$STATE/slack-watch.log"
 LOCK="$STATE/slack-watch-lock.d"
 SEEN="$STATE/slack-seen"          # <conversationId> → last ts processed
 USERCACHE="$STATE/slack-users.json"
-CONFIG="$DIR/config.json"
-WATCH="$DIR/watch.json"
+CONFIG="$DIR/config.json"         # all instance config: token, org, watch list, repos
 REPOS="$DIR/repos"                # reuse review.sh's bare-clone cache
 WORKTREES="$DIR/wt"
 
 CLASSIFY_MODEL="${SLACK_WATCH_MODEL:-sonnet}"
 INVESTIGATE_MODEL="${SLACK_INVESTIGATE_MODEL:-opus}"
-ORG="chaching-engineering"
 
 MAX_REPLIES=5         # replies sent per pass — a blast cap
 MAX_INVESTIGATE=2     # code investigations per pass — a cost cap
@@ -67,11 +65,18 @@ if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt "$START_HOUR" ] || 
 fi
 
 TOKEN=$(jq -r '.botToken // empty' "$CONFIG" 2>/dev/null)
-NOTIFY=$(jq -r '.notifyChannel // "C0B68775U64"' "$CONFIG" 2>/dev/null)
-NOTIFY_USER=$(jq -r '.notifyUserId // "U06K1K67Y8P"' "$CONFIG" 2>/dev/null)
-BOT=$(jq -r '.botUserId' "$WATCH" 2>/dev/null)
+NOTIFY=$(jq -r '.notifyChannel // empty' "$CONFIG" 2>/dev/null)
+NOTIFY_USER=$(jq -r '.notifyUserId // empty' "$CONFIG" 2>/dev/null)
+BOT=$(jq -r '.botUserId // empty' "$CONFIG" 2>/dev/null)
+ORG=$(jq -r '.githubOrg // empty' "$CONFIG" 2>/dev/null)
+OWNER=$(jq -r '.ownerName // "the owner"' "$CONFIG" 2>/dev/null)
+GHUSER=$(jq -r '.githubUser // empty' "$CONFIG" 2>/dev/null)
+# Inject config values into a prompt template's {{OWNER}} / {{GITHUB_USER}} slots.
+prompt_file() { OWNER="$OWNER" GHUSER="$GHUSER" perl -pe 's/\{\{OWNER\}\}/$ENV{OWNER}/g; s/\{\{GITHUB_USER\}\}/$ENV{GHUSER}/g' "$1"; }
+# Repo menu the classifier picks from, built from config so cloners edit one file.
+REPO_LIST=$(jq -r '.repos[] | "- \(.name) — \(.for)"' "$CONFIG" 2>/dev/null)
 if [ -z "$TOKEN" ] || [ -z "$BOT" ] || [ "$BOT" = "null" ]; then
-  log "missing botToken ($CONFIG) or botUserId ($WATCH) — cannot run"; exit 1
+  log "missing botToken or botUserId in $CONFIG — cannot run"; exit 1
 fi
 
 NOW=$(date +%s)
@@ -130,8 +135,8 @@ send_reply() { # channel thread_ts text
   log "reply failed in $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"; return 1
 }
 
-notify_lex() { # text
-  if [ "$DRY_RUN" = "1" ]; then printf '  WOULD NOTIFY LEX:\n%s\n' "$1"; return 0; fi
+notify_owner() { # text
+  if [ "$DRY_RUN" = "1" ]; then printf '  WOULD NOTIFY OWNER:\n%s\n' "$1"; return 0; fi
   local payload
   payload=$(jq -n --arg ch "$NOTIFY" --arg t "$1" \
     '{channel:$ch, text:$t, unfurl_links:false, unfurl_media:false}')
@@ -142,7 +147,7 @@ notify_lex() { # text
 
 # --- investigate a flagged issue against the repo ----------------------------
 # Detached checkout of the repo's default-branch head, handed to a sub-agent.
-# Read-only: no Edit/Write, no MCP, budget-capped. Findings go to Lex only.
+# Read-only: no Edit/Write, no MCP, budget-capped. Findings go to the owner only.
 investigate() { # repo issue_text reporter link
   local repo="$1" issue="$2" reporter="$3" link="$4"
   local bare="$REPOS/$repo.git" wt="$WORKTREES/watch-$repo-$NOW-$RANDOM"
@@ -165,7 +170,7 @@ $issue
 --- END ---
 
 Slack link: ${link:-(none)}" \
-    --append-system-prompt "$(cat "$DIR/slack-investigate-prompt.md")" \
+    --append-system-prompt "$(prompt_file "$DIR/slack-investigate-prompt.md")" \
     --model "$INVESTIGATE_MODEL" \
     --allowed-tools 'Bash,Read,Grep,Glob' \
     --disallowed-tools 'Edit,Write,NotebookEdit' \
@@ -185,7 +190,7 @@ Slack link: ${link:-(none)}" \
 # conversation just seeds the cursor at "now" so we never reply to backlog.
 process_conv() {
   local conv="$1" label="$2" is_dm="$3"
-  # Never watch the notify channel — it is Lex's private brief, output only.
+  # Never watch the notify channel — it is the owner's private brief, output only.
   [ "$conv" = "$NOTIFY" ] && return 0
 
   local seenf="$SEEN/$conv" last
@@ -199,7 +204,7 @@ process_conv() {
   api_get conversations.history "channel=$conv" "oldest=$last" "inclusive=false" "limit=$HIST_LIMIT"
   if [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" != "true" ]; then
     local err; err=$(jq -r '.error // .' "$TMP/resp" 2>/dev/null)
-    [ "$err" = "not_in_channel" ] && log "$label ($conv): bot not a member — /invite @lex_bot to watch it" \
+    [ "$err" = "not_in_channel" ] && log "$label ($conv): bot not a member — invite the bot to this channel to watch it" \
                                   || log "$label ($conv): history error: $err"
     return 0
   fi
@@ -235,9 +240,12 @@ process_conv() {
   out=$(cd "$DIR" && claude -p "$ctx
 Bot user id: $BOT
 
+Repos available to flag/investigate (use an exact name, or null):
+$REPO_LIST
+
 Messages (JSON):
 $enriched" \
-    --append-system-prompt "$(cat "$DIR/slack-watch-prompt.md")" \
+    --append-system-prompt "$(prompt_file "$DIR/slack-watch-prompt.md")" \
     --model "$CLASSIFY_MODEL" \
     --allowed-tools '' 2>>"$LOG")
 
@@ -267,15 +275,15 @@ $enriched" \
           investigated=$(( investigated + 1 ))
           log "$label: investigating flagged issue in $repo (by $reporter)"
           findings=$(investigate "$repo" "$text" "$reporter" "$link")
-          notify_lex "🔎 *Issue raised in $label* by *$reporter* <@${NOTIFY_USER}>
+          notify_owner "🔎 *Issue raised in $label* by *$reporter* <@${NOTIFY_USER}>
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }repo: \`$repo\`
 
 ${findings:-(investigation failed — see slack-watch.log)}"
         else
-          # No repo pinned, or the investigate cap is spent — flag it raw so Lex
+          # No repo pinned, or the investigate cap is spent — flag it raw so the owner
           # never silently loses a report.
-          notify_lex "⚠️ *Possible issue in $label* by *$reporter* <@${NOTIFY_USER}>
+          notify_owner "⚠️ *Possible issue in $label* by *$reporter* <@${NOTIFY_USER}>
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${investigated:+ (not investigated: $( [ "$investigated" -ge "$MAX_INVESTIGATE" ] && echo cap reached || echo no repo ))}"
         fi ;;
@@ -293,7 +301,7 @@ else
   # Watched channels.
   while IFS=$'\t' read -r id name; do
     [ -n "$id" ] && process_conv "$id" "$name" 0
-  done < <(jq -r '.channels[] | [.id, .name] | @tsv' "$WATCH")
+  done < <(jq -r '.watch[] | [.id, .name] | @tsv' "$CONFIG")
 
   # DMs: every open IM except Slackbot and the bot's own.
   api_get conversations.list "types=im" "limit=200"

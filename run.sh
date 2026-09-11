@@ -10,8 +10,12 @@ LOG="$STATE/run.log"
 LOCK="$STATE/lock.d"
 CONFIG="$DIR/config.json"
 MODEL="sonnet"
+OWNER=$(jq -r '.ownerName // "the owner"' "$CONFIG" 2>/dev/null)
+GHUSER=$(jq -r '.githubUser // empty' "$CONFIG" 2>/dev/null)
+# Inject config values into a prompt template's {{OWNER}} / {{GITHUB_USER}} slots.
+prompt_file() { OWNER="$OWNER" GHUSER="$GHUSER" perl -pe 's/\{\{OWNER\}\}/$ENV{OWNER}/g; s/\{\{GITHUB_USER\}\}/$ENV{GHUSER}/g' "$1"; }
 
-# Only bother Lex during the working day. Last tick is 17:30.
+# Only bother the owner during the working day. Last tick is 17:30.
 START_HOUR=9
 END_HOUR=18
 
@@ -95,9 +99,9 @@ fi
 # the model no tools: it only has to read the dump it was handed.
 DIGEST=$(cd "$DIR" && claude -p "$DUMP
 
-=== PREVIOUS DIGEST (what you already told Lex last run) ===
+=== PREVIOUS DIGEST (what you already told the owner last run) ===
 $PREV" \
-  --append-system-prompt "$(cat "$DIR/prompt.md")" \
+  --append-system-prompt "$(prompt_file "$DIR/prompt.md")" \
   --model "$MODEL" \
   --allowed-tools '' 2>>"$LOG")
 RC=$?
@@ -137,15 +141,14 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 TOKEN=$(jq -r '.botToken // empty' "$CONFIG" 2>/dev/null)
-CHANNEL=$(jq -r '.notifyChannel // "C0B68775U64"' "$CONFIG" 2>/dev/null)
-USER_ID=$(jq -r '.notifyUserId // "U06K1K67Y8P"' "$CONFIG" 2>/dev/null)
+CHANNEL=$(jq -r '.notifyChannel // empty' "$CONFIG" 2>/dev/null)
+USER_ID=$(jq -r '.notifyUserId // empty' "$CONFIG" 2>/dev/null)
 if [ -z "$TOKEN" ]; then
   log "no botToken in $CONFIG — cannot post"
   exit 1
 fi
 
-# The FEBot bot token is what actually notifies Lex; a user-token message to
-# himself is treated as a self-message and stays silent.
+# The bot token is what actually notifies the owner; a user-token message to# themselves is treated as a self-message and stays silent.
 if [ "$MODE" = "morning" ]; then
   HEADER="🌅 *Morning brief* · $(date '+%A %d %b')  <@${USER_ID}>"
 else
