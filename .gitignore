@@ -1,3 +1,6 @@
+# Secrets: bot token + channel ids. Lives here now; ~/.config/claude-slack/config.json
+# is a symlink to it so the notify skill keeps working.
+config.json
 # Runtime state, logs, cursors, user cache — machine-local, some has Slack data.
 state/
 # Bare clones of the org's PRIVATE repos — never push these.

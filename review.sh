@@ -28,7 +28,7 @@ REPOS="$DIR/repos"               # bare clone cache, kept between runs
 WORKTREES="$DIR/wt"              # throwaway checkouts, deleted after each review
 
 ROUTING="$DIR/slack-routing.json"   # channel menu + github→slack user map
-SLACK_CONFIG="${HOME}/.config/claude-slack/config.json"
+SLACK_CONFIG="$DIR/config.json"
 
 ORG="chaching-engineering"
 ME="lexwebb"

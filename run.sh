@@ -8,7 +8,7 @@ DIR="${HOME}/.claude/statusbot"
 STATE="$DIR/state"
 LOG="$STATE/run.log"
 LOCK="$STATE/lock.d"
-CONFIG="${HOME}/.config/claude-slack/config.json"
+CONFIG="$DIR/config.json"
 MODEL="sonnet"
 
 # Only bother Lex during the working day. Last tick is 17:30.
