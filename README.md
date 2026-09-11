@@ -11,14 +11,15 @@ live in a single gitignored `config.json`.
 | `review.sh` | every 30 min (offset), 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a Slack write-up routed by workstream. Keyed by head SHA: one review per push. |
 | `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** as the bot (mentions/DMs/questions), or **flag** a code-related issue — investigating it against the repo with a `claude -p` sub-agent and posting the findings to your notify channel. |
 
-`collect.sh` is a helper for `run.sh` (prints a plain-text state bundle). The
-`*-prompt.md` files are the system prompts; they use `{{OWNER}}` / `{{GITHUB_USER}}`
-placeholders that the scripts fill from config at runtime.
+`collect.sh` is a helper for `run.sh` (prints a plain-text state bundle).
+`lib.sh` is sourced by every script for PATH setup and macOS/Linux `date`/`stat`
+shims. The `*-prompt.md` files are the system prompts; they use `{{OWNER}}` /
+`{{GITHUB_USER}}` placeholders that the scripts fill from config at runtime.
 
 ## Requirements
 
-- macOS (launchd; the scripts use BSD `date -v`). `bash`, `jq`, `perl`, `git`,
-  `curl`, and the GitHub `gh` CLI (authenticated: `gh auth login`).
+- **macOS** (launchd) or **Linux** (systemd user timers, or cron). Windows via WSL.
+- `bash`, `jq`, `perl`, `git`, `curl`, and the GitHub `gh` CLI (`gh auth login`).
 - The **Claude CLI** (`claude`), logged in — this is what does the reasoning.
 - A **Slack app / bot** in your workspace with a bot token (`xoxb-…`).
 
@@ -35,11 +36,19 @@ placeholders that the scripts fill from config at runtime.
    the field notes below.
 2. Invite the bot to every channel you list under `watch` and to any channel in
    the review routing `channels` map.
-3. Edit the three `me.lex.claude-*.plist` files (label + script paths + the
-   `PATH` line, which is pinned to a Node install) for your machine, copy them
-   to `~/Library/LaunchAgents/`, and `launchctl load` each.
-4. Smoke-test before scheduling: `./run.sh --dry-run`,
-   `./review.sh --dry-run --pr owner-repo#123`, `./slack-watch.sh --dry-run`.
+3. Run **`./install.sh`**. It checks prerequisites, validates config, writes
+   `path.env` (the tool dirs the schedulers need), sanity-checks the Slack token
+   and channel membership, then installs and starts the schedulers:
+   - macOS → three launchd agents in `~/Library/LaunchAgents/`
+   - Linux → three systemd user timers (or crontab lines if systemd is absent)
+
+   Re-run any time after editing config. `./install.sh --no-schedule` validates
+   without touching the scheduler; `./install.sh --uninstall` removes it.
+4. Smoke-test: `./run.sh --dry-run`, `./review.sh --dry-run --pr owner-repo#123`,
+   `./slack-watch.sh --dry-run`.
+
+On Linux, add `sudo loginctl enable-linger $(whoami)` if you want the timers to
+run while you're logged out.
 
 ### config.json fields
 

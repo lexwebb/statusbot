@@ -7,7 +7,9 @@ set -uo pipefail
 SINCE="${1:-$(( $(date +%s) - 1800 ))}"
 MODE="${2:-normal}"
 NOW=$(date +%s)
-CONFIG="${HOME}/.claude/statusbot/config.json"   # single source of instance config
+DIR="${HOME}/.claude/statusbot"
+CONFIG="$DIR/config.json"                         # single source of instance config
+. "$DIR/lib.sh"                                   # PATH + cross-platform date/stat shims
 ORG=$(jq -r '.githubOrg' "$CONFIG" 2>/dev/null)
 ME=$(jq -r '.githubUser' "$CONFIG" 2>/dev/null)
 
@@ -23,7 +25,7 @@ BOTS="^($(jq -r '.botLogins | join("|")' "$CONFIG" 2>/dev/null))(\\[bot\\])?\$"
 SRC_DIR="${HOME}/src"
 PROJECTS_DIR="${HOME}/.claude/projects"
 
-iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+iso() { iso_utc "$1"; }
 mins_ago() { echo $(( (NOW - $1) / 60 )); }
 
 echo "=== WINDOW ==="
@@ -57,7 +59,7 @@ echo
 echo "=== CLAUDE SESSIONS TOUCHED IN WINDOW ==="
 for f in "$PROJECTS_DIR"/*/*.jsonl; do
   [ -f "$f" ] || continue
-  mtime=$(stat -f %m "$f" 2>/dev/null) || continue
+  mtime=$(file_mtime "$f") || continue
   [ "$mtime" -lt "$SINCE" ] && continue
 
   project=$(basename "$(dirname "$f")")
@@ -124,7 +126,7 @@ else
     if [ -n "$json" ]; then
       printf '%s' "$json" >"$CACHE/$repo.json"
     elif [ -s "$CACHE/$repo.json" ]; then
-      age=$(( (NOW - $(stat -f %m "$CACHE/$repo.json")) / 60 ))
+      age=$(( (NOW - $(file_mtime "$CACHE/$repo.json")) / 60 ))
       echo "NOTE: GitHub 503 on $repo — using cached PR data from ${age} min ago, may be out of date."
       json=$(cat "$CACHE/$repo.json")
     else

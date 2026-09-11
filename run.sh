@@ -9,6 +9,7 @@ STATE="$DIR/state"
 LOG="$STATE/run.log"
 LOCK="$STATE/lock.d"
 CONFIG="$DIR/config.json"
+. "$DIR/lib.sh"   # PATH for schedulers + cross-platform date/stat shims
 MODEL="sonnet"
 OWNER=$(jq -r '.ownerName // "the owner"' "$CONFIG" 2>/dev/null)
 GHUSER=$(jq -r '.githubUser // empty' "$CONFIG" 2>/dev/null)
@@ -47,9 +48,6 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-# PATH for launchd, which starts with a bare environment.
-export PATH="${HOME}/.nvm/versions/node/v22.17.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
 NOW=$(date +%s)
 HOUR=$(date +%H); HOUR=${HOUR#0}
 TODAY=$(date +%Y-%m-%d)
@@ -65,9 +63,9 @@ MODE="normal"
 if [ "$FORCE_MORNING" = "1" ] || [ "$(cat "$STATE/last-morning" 2>/dev/null)" != "$TODAY" ]; then
   MODE="morning"
   if [ "$(date +%u)" = "1" ]; then
-    MORNING_SINCE=$(date -v-3d -v0H -v0M -v0S +%s)   # Monday → back to Friday
+    MORNING_SINCE=$(epoch_days_ago_midnight 3)   # Monday → back to Friday
   else
-    MORNING_SINCE=$(date -v-1d -v0H -v0M -v0S +%s)
+    MORNING_SINCE=$(epoch_days_ago_midnight 1)
   fi
 fi
 

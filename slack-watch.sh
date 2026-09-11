@@ -21,6 +21,7 @@ USERCACHE="$STATE/slack-users.json"
 CONFIG="$DIR/config.json"         # all instance config: token, org, watch list, repos
 REPOS="$DIR/repos"                # reuse review.sh's bare-clone cache
 WORKTREES="$DIR/wt"
+. "$DIR/lib.sh"                   # PATH for schedulers + cross-platform date/stat shims
 
 CLASSIFY_MODEL="${SLACK_WATCH_MODEL:-sonnet}"
 INVESTIGATE_MODEL="${SLACK_INVESTIGATE_MODEL:-opus}"
@@ -55,9 +56,6 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   fi
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-
-# PATH for launchd's bare environment.
-export PATH="${HOME}/.nvm/versions/node/v22.17.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 HOUR=$(date +%H); HOUR=${HOUR#0}
 if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt "$START_HOUR" ] || [ "$HOUR" -ge "$END_HOUR" ]; }; then

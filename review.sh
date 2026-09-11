@@ -29,6 +29,7 @@ WORKTREES="$DIR/wt"              # throwaway checkouts, deleted after each revie
 
 SLACK_CONFIG="$DIR/config.json"     # all instance config: token, org, routing, users
 ROUTING="$SLACK_CONFIG"             # .channels menu + .users github→slack map live here too
+. "$DIR/lib.sh"                     # PATH for schedulers + cross-platform date/stat shims
 
 # Instance-specific values come from config.json so this repo can be cloned.
 ORG=$(jq -r '.githubOrg' "$SLACK_CONFIG" 2>/dev/null)
@@ -74,9 +75,6 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   fi
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-
-# PATH for launchd, which starts with a bare environment.
-export PATH="${HOME}/.nvm/versions/node/v22.17.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 NOW=$(date +%s)
 STALE_BEFORE=$(( NOW - STALE_DAYS * 86400 ))
