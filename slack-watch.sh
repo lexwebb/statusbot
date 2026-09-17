@@ -120,34 +120,58 @@ permalink() { # channel ts → url (best-effort; falls back to empty)
   jq -r '.permalink // empty' "$TMP/resp" 2>/dev/null
 }
 
-# Between deciding to reply and actually posting, the thread may have moved on —
-# a human (the owner or anyone) may have already answered. Re-fetch the thread's
-# replies since the triggering message and, if humans have chimed in, let a cheap
-# judge decide: stay quiet (echo nothing), post as-is, or post a revised text
-# that only adds what's genuinely new. Echoes the text to post, or nothing.
-# conv, trigger_ts, candidate_text  → stdout: text to post (empty = skip)
+RECONSIDER_LOOKBACK=7200   # seconds of recent channel activity the judge weighs
+RECONSIDER_MAX_THREADS=6   # threads to expand replies for — a cost cap
+
+# Before posting, weigh the draft against ALL recent activity in the channel —
+# not just the triggering thread. The same issue is often already being worked in
+# a sibling thread or the main channel, and a parallel answer there is noise even
+# though our own thread looks empty. Gather recent top-level messages and the
+# replies of recently-touched threads, hand the lot to a cheap judge, and let it
+# decide skip / post / revise-to-add-only-what's-new. Echoes text to post (empty
+# = skip). conv, trigger_ts, candidate_text → stdout.
 reconsider_reply() {
   local conv="$1" trig="$2" candidate="$3"
-  api_get conversations.replies "channel=$conv" "ts=$trig" "limit=50"
-  [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ] || { printf '%s' "$candidate"; return 0; }
-  # Human replies strictly newer than the trigger (drop the parent, the bot, bots).
-  local newer
-  newer=$(jq -c --arg bot "$BOT" --arg trig "$trig" \
-    '[ .messages[]
-       | select(.ts > $trig) | select(.subtype == null)
-       | select(.bot_id == null) | select(.user != $bot)
-       | select((.text // "") != "")
-       | {user, text} ]' "$TMP/resp")
-  [ "$(printf '%s' "$newer" | jq 'length')" = "0" ] && { printf '%s' "$candidate"; return 0; }
+  local since=$(( ${trig%.*} - RECONSIDER_LOOKBACK ))
 
-  log "reconsider: $(printf '%s' "$newer" | jq length) human repl(y/ies) since trigger — judging"
+  # Recent channel history (top-level messages within the lookback window).
+  api_get conversations.history "channel=$conv" "oldest=$since" "limit=$HIST_LIMIT"
+  [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ] || { printf '%s' "$candidate"; return 0; }
+  local hist
+  hist=$(jq -c --arg bot "$BOT" \
+    '[ .messages[]
+       | select(.subtype == null) | select(.bot_id == null) | select(.user != $bot)
+       | select((.text // "") != "")
+       | {ts, user, text, reply_count: (.reply_count // 0)} ]' "$TMP/resp")
+
+  # Expand replies for the most recent threads that have any (incl. the trigger's
+  # own thread). Bounded by RECONSIDER_MAX_THREADS to keep it cheap.
+  local context="$hist" root_ts replies
+  for root_ts in $(printf '%s' "$hist" | jq -r 'sort_by(.ts) | reverse | .[] | select(.reply_count > 0) | .ts' | head -n "$RECONSIDER_MAX_THREADS"); do
+    api_get conversations.replies "channel=$conv" "ts=$root_ts" "limit=50"
+    [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ] || continue
+    replies=$(jq -c --arg bot "$BOT" \
+      '[ .messages[]
+         | select(.subtype == null) | select(.bot_id == null) | select(.user != $bot)
+         | select((.text // "") != "")
+         | {ts, user, text} ]' "$TMP/resp")
+    context=$(printf '%s' "$context" | jq -c --argjson r "$replies" '. + $r')
+  done
+  # Dedup by ts and order oldest→newest for the judge.
+  context=$(printf '%s' "$context" | jq -c 'unique_by(.ts) | sort_by(.ts)')
+  # Nothing recent to weigh against — post the draft, no need to spend a model call.
+  [ "$(printf '%s' "$context" | jq 'length')" = "0" ] && { printf '%s' "$candidate"; return 0; }
+
+  log "reconsider: judging against $(printf '%s' "$context" | jq length) recent channel message(s)"
   local verdict
-  verdict=$(cd "$DIR" && claude -p "A human (or humans) replied in this thread after we started drafting.
+  verdict=$(cd "$DIR" && claude -p "We are about to post a reply in a Slack thread. Below is our draft, then ALL
+recent human activity in the same channel (top-level messages and thread replies,
+oldest first) — including other threads. Decide if posting still helps.
 
 --- OUR DRAFT REPLY ---
 $candidate
---- HUMAN REPLIES SINCE (JSON) ---
-$newer
+--- RECENT CHANNEL ACTIVITY (JSON) ---
+$context
 --- END ---" \
     --append-system-prompt "$(cat "$DIR/slack-reconsider-prompt.md")" \
     --model "$CLASSIFY_MODEL" --allowed-tools '' 2>>"$LOG")
@@ -158,7 +182,7 @@ $newer
   obj=$(printf '%s' "$verdict" | grep -o '{.*}')
   action=$(printf '%s' "$obj" | jq -r '.action // "post"' 2>/dev/null); action=${action:-post}
   case "$action" in
-    skip)   log "reconsider: skipping — already handled in-thread"; printf '' ;;
+    skip)   log "reconsider: skipping — already covered in recent channel activity"; printf '' ;;
     revise) text=$(printf '%s' "$obj" | jq -r '.text // empty' 2>/dev/null)
             [ -n "$text" ] && { log "reconsider: posting revised addition"; printf '%s' "$text"; } || printf '%s' "$candidate" ;;
     *)      printf '%s' "$candidate" ;;
