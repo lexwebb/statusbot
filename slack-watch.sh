@@ -120,6 +120,51 @@ permalink() { # channel ts → url (best-effort; falls back to empty)
   jq -r '.permalink // empty' "$TMP/resp" 2>/dev/null
 }
 
+# Between deciding to reply and actually posting, the thread may have moved on —
+# a human (the owner or anyone) may have already answered. Re-fetch the thread's
+# replies since the triggering message and, if humans have chimed in, let a cheap
+# judge decide: stay quiet (echo nothing), post as-is, or post a revised text
+# that only adds what's genuinely new. Echoes the text to post, or nothing.
+# conv, trigger_ts, candidate_text  → stdout: text to post (empty = skip)
+reconsider_reply() {
+  local conv="$1" trig="$2" candidate="$3"
+  api_get conversations.replies "channel=$conv" "ts=$trig" "limit=50"
+  [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ] || { printf '%s' "$candidate"; return 0; }
+  # Human replies strictly newer than the trigger (drop the parent, the bot, bots).
+  local newer
+  newer=$(jq -c --arg bot "$BOT" --arg trig "$trig" \
+    '[ .messages[]
+       | select(.ts > $trig) | select(.subtype == null)
+       | select(.bot_id == null) | select(.user != $bot)
+       | select((.text // "") != "")
+       | {user, text} ]' "$TMP/resp")
+  [ "$(printf '%s' "$newer" | jq 'length')" = "0" ] && { printf '%s' "$candidate"; return 0; }
+
+  log "reconsider: $(printf '%s' "$newer" | jq length) human repl(y/ies) since trigger — judging"
+  local verdict
+  verdict=$(cd "$DIR" && claude -p "A human (or humans) replied in this thread after we started drafting.
+
+--- OUR DRAFT REPLY ---
+$candidate
+--- HUMAN REPLIES SINCE (JSON) ---
+$newer
+--- END ---" \
+    --append-system-prompt "$(cat "$DIR/slack-reconsider-prompt.md")" \
+    --model "$CLASSIFY_MODEL" --allowed-tools '' 2>>"$LOG")
+  # Prompt returns JSON: {"action":"skip|post|revise","text":"<only if revise>"}.
+  # grep the object out greedily (to the last }) — tolerant of stray prose and of
+  # braces inside text. No JSON at all → fall back to posting the draft.
+  local obj action text
+  obj=$(printf '%s' "$verdict" | grep -o '{.*}')
+  action=$(printf '%s' "$obj" | jq -r '.action // "post"' 2>/dev/null); action=${action:-post}
+  case "$action" in
+    skip)   log "reconsider: skipping — already handled in-thread"; printf '' ;;
+    revise) text=$(printf '%s' "$obj" | jq -r '.text // empty' 2>/dev/null)
+            [ -n "$text" ] && { log "reconsider: posting revised addition"; printf '%s' "$text"; } || printf '%s' "$candidate" ;;
+    *)      printf '%s' "$candidate" ;;
+  esac
+}
+
 send_reply() { # channel thread_ts text
   [ "$replies_sent" -ge "$MAX_REPLIES" ] && { log "reply cap $MAX_REPLIES hit, holding rest for next pass"; return 1; }
   if [ "$DRY_RUN" = "1" ]; then printf '  WOULD REPLY in %s:\n    %s\n' "$1" "$3"; return 0; fi
@@ -266,7 +311,7 @@ $enriched" \
     return 0
   fi
 
-  local d disp ts text reporter link findings repo why
+  local d disp ts text reporter link findings repo why to_post
   while IFS= read -r d; do
     disp=$(printf '%s' "$d" | jq -r '.disposition')
     ts=$(printf '%s' "$d" | jq -r '.ts')
@@ -288,7 +333,10 @@ $enriched" \
           # pulled in when specifically asked). A failed investigation is not
           # posted publicly; it stays a private note so nothing is lost.
           if [ -n "$findings" ]; then
-            send_reply "$conv" "$ts" "$findings"
+            # The thread may have been triaged by a human while we investigated.
+            # Decide whether chiming in still helps before posting.
+            to_post=$(reconsider_reply "$conv" "$ts" "$findings")
+            [ -n "$to_post" ] && send_reply "$conv" "$ts" "$to_post"
             notify_owner "🔎 *Issue raised in $label* by *$reporter* (FYI, no action needed)
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }repo: \`$repo\`
