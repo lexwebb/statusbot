@@ -133,6 +133,16 @@ send_reply() { # channel thread_ts text
   log "reply failed in $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"; return 1
 }
 
+join_channel() { # channel_id — self-join a public channel so we can read it.
+  # Idempotent: joining a channel we're already in returns ok. Public only.
+  [ "$DRY_RUN" = "1" ] && { printf '  WOULD JOIN %s\n' "$1"; return 0; }
+  api_post conversations.join "$(jq -n --arg ch "$1" '{channel:$ch}')"
+  if [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ]; then
+    log "joined $1"; return 0
+  fi
+  log "join failed for $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"; return 1
+}
+
 notify_owner() { # text
   if [ "$DRY_RUN" = "1" ]; then printf '  WOULD NOTIFY OWNER:\n%s\n' "$1"; return 0; fi
   local payload
@@ -256,7 +266,7 @@ $enriched" \
     return 0
   fi
 
-  local d disp ts text reporter link findings repo why
+  local d disp ts text reporter link findings repo why brief pub_reply
   while IFS= read -r d; do
     disp=$(printf '%s' "$d" | jq -r '.disposition')
     ts=$(printf '%s' "$d" | jq -r '.ts')
@@ -273,11 +283,23 @@ $enriched" \
           investigated=$(( investigated + 1 ))
           log "$label: investigating flagged issue in $repo (by $reporter)"
           findings=$(investigate "$repo" "$text" "$reporter" "$link")
+          # The sub-agent returns the private owner brief and the public reply
+          # separated by a ---REPLY--- line. Split them; if the marker is absent
+          # (old prompt / malformed output) treat the whole thing as the brief
+          # and post no public reply — never leak an owner brief into channel.
+          brief="$findings"; pub_reply=""
+          if printf '%s' "$findings" | grep -q '^---REPLY---$'; then
+            brief=$(printf '%s' "$findings" | sed '/^---REPLY---$/,$d')
+            pub_reply=$(printf '%s' "$findings" | sed '1,/^---REPLY---$/d')
+          fi
           notify_owner "🔎 *Issue raised in $label* by *$reporter* <@${NOTIFY_USER}>
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }repo: \`$repo\`
 
-${findings:-(investigation failed — see slack-watch.log)}"
+${brief:-(investigation failed — see slack-watch.log)}"
+          # Answer the person in-thread with the reporter-facing reply only.
+          # Counts against the same reply blast cap.
+          [ -n "$pub_reply" ] && send_reply "$conv" "$ts" "$pub_reply"
         else
           # No repo pinned, or the investigate cap is spent — flag it raw so the owner
           # never silently loses a report.
@@ -296,10 +318,31 @@ ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${in
 if [ -n "$ONLY" ]; then
   process_conv "$ONLY" "$ONLY" 0
 else
-  # Watched channels.
+  # Watched channels: the explicit list from config, plus every public channel
+  # named feature* the bot can see. Discovery each pass means a new feature-
+  # channel is watched with no config edit; we merge on id so an explicitly
+  # listed channel keeps its friendly config name.
+  WATCH_TSV=$(jq -r '.watch[] | [.id, .name] | @tsv' "$CONFIG")
+  # ponytail: one conversations.list page (200) of public, non-archived channels.
+  # If the workspace ever exceeds 200 public channels, paginate on next_cursor.
+  api_get conversations.list "types=public_channel" "exclude_archived=true" "limit=200"
+  if [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ]; then
+    known_ids=$(printf '%s' "$WATCH_TSV" | cut -f1)
+    while IFS=$'\t' read -r id name member; do
+      [ -z "$id" ] && continue
+      # Self-join any feature* channel we're not yet a member of, so we can read
+      # its history. Needs channels:join on the bot token. Idempotent + public-only.
+      [ "$member" != "true" ] && join_channel "$id"
+      printf '%s\n' "$known_ids" | grep -qxF "$id" && continue  # already explicit
+      WATCH_TSV="${WATCH_TSV}"$'\n'"${id}"$'\t'"${name}"
+    done < <(jq -r '.channels[] | select(.name | startswith("feature")) | [.id, .name, (.is_member|tostring)] | @tsv' "$TMP/resp")
+  else
+    log "conversations.list(public) error: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null) — using explicit watch list only"
+  fi
+
   while IFS=$'\t' read -r id name; do
     [ -n "$id" ] && process_conv "$id" "$name" 0
-  done < <(jq -r '.watch[] | [.id, .name] | @tsv' "$CONFIG")
+  done < <(printf '%s\n' "$WATCH_TSV")
 
   # DMs: every open IM except Slackbot and the bot's own.
   api_get conversations.list "types=im" "limit=200"

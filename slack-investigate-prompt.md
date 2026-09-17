@@ -24,7 +24,21 @@ is this real, where does it live, and what would fixing it involve.
 
 ## Output
 
-A short Slack-ready write-up, plain text (Slack mrkdwn, no markdown headings).
-Lead with your verdict in one line, then 2-5 lines of specifics with
-`repo/path.ext:line` references. End with the single most useful next step.
-Keep it tight — {{OWNER}} reads this on their phone. Output only the write-up.
+Two write-ups, separated by a line containing only `---REPLY---`, in this order
+and nothing else:
+
+1. **The owner brief** (before the separator). Plain text, Slack mrkdwn, no
+   markdown headings. Lead with your verdict in one line, then 2-5 lines of
+   specifics with `repo/path.ext:line` references. End with the single most
+   useful next step. Keep it tight — {{OWNER}} reads this on their phone. This is
+   private; it is for {{OWNER}}, never seen by the reporter.
+
+2. **The public reply** (after the separator). This is posted in-thread to the
+   person who reported it, automatically, as {{OWNER}}'s bot — write it *to them*.
+   One or two plain sentences: whether it looks like a real issue and, if so,
+   that it's been flagged to {{OWNER}} to look at. NO internal file paths, line
+   numbers, repo internals, or anything sensitive. Never promise a fix or a
+   timeline, never commit {{OWNER}} to anything. If it turns out not to be an issue,
+   say so briefly and kindly. If you genuinely can't tell, say it's been passed on.
+
+Output exactly: the owner brief, then a line `---REPLY---`, then the public reply.
