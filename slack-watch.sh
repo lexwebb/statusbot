@@ -266,7 +266,7 @@ $enriched" \
     return 0
   fi
 
-  local d disp ts text reporter link findings repo why brief pub_reply
+  local d disp ts text reporter link findings repo why
   while IFS= read -r d; do
     disp=$(printf '%s' "$d" | jq -r '.disposition')
     ts=$(printf '%s' "$d" | jq -r '.ts')
@@ -283,23 +283,24 @@ $enriched" \
           investigated=$(( investigated + 1 ))
           log "$label: investigating flagged issue in $repo (by $reporter)"
           findings=$(investigate "$repo" "$text" "$reporter" "$link")
-          # The sub-agent returns the private owner brief and the public reply
-          # separated by a ---REPLY--- line. Split them; if the marker is absent
-          # (old prompt / malformed output) treat the whole thing as the brief
-          # and post no public reply — never leak an owner brief into channel.
-          brief="$findings"; pub_reply=""
-          if printf '%s' "$findings" | grep -q '^---REPLY---$'; then
-            brief=$(printf '%s' "$findings" | sed '/^---REPLY---$/,$d')
-            pub_reply=$(printf '%s' "$findings" | sed '1,/^---REPLY---$/d')
-          fi
-          notify_owner "🔎 *Issue raised in $label* by *$reporter* <@${NOTIFY_USER}>
+          # The findings are reporter-facing: post them in-thread, and send the
+          # same text to the owner as an FYI (not an action — the owner is only
+          # pulled in when specifically asked). A failed investigation is not
+          # posted publicly; it stays a private note so nothing is lost.
+          if [ -n "$findings" ]; then
+            send_reply "$conv" "$ts" "$findings"
+            notify_owner "🔎 *Issue raised in $label* by *$reporter* (FYI, no action needed)
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }repo: \`$repo\`
 
-${brief:-(investigation failed — see slack-watch.log)}"
-          # Answer the person in-thread with the reporter-facing reply only.
-          # Counts against the same reply blast cap.
-          [ -n "$pub_reply" ] && send_reply "$conv" "$ts" "$pub_reply"
+$findings"
+          else
+            notify_owner "🔎 *Issue raised in $label* by *$reporter* <@${NOTIFY_USER}>
+> $(printf '%s' "$text" | head -c 500)
+${link:+<$link|open in Slack> · }repo: \`$repo\`
+
+(investigation failed — see slack-watch.log)"
+          fi
         else
           # No repo pinned, or the investigate cap is spent — flag it raw so the owner
           # never silently loses a report.
