@@ -1,0 +1,1 @@
+prompts/slack-watch-prompt.md

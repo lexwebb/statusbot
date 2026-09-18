@@ -1,0 +1,1 @@
+prompts/slack-investigate-prompt.md
