@@ -9,7 +9,7 @@
     "review": "tsx src/bin/review.ts",
     "slack-watch": "tsx src/bin/slack-watch.ts",
     "socket": "tsx src/bin/socket.ts",
-    "install": "tsx src/install.ts",
+    "setup": "tsx src/install.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
