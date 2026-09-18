@@ -123,5 +123,11 @@ run while you're logged out.
 - Each runs one-at-a-time via a `mkdir` lock. `run.sh` and `slack-watch.sh` only
   act 09:00–18:00; `review.sh` runs 24/7 (a review isn't time-of-day sensitive).
 
-Tune caps/models/hours via the constants at the top of each script (or the
+Tune caps/models/hours via the constants at the top of each job (or the
 `REVIEW_MODEL` / `SLACK_WATCH_MODEL` / `SLACK_INVESTIGATE_MODEL` env vars).
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md) — free to use, modify, and share for
+any **noncommercial** purpose, with attribution. Commercial use is not permitted.
+© 2026 Lex Southin-Webb.
