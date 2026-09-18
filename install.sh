@@ -34,7 +34,7 @@ die()  { printf '  ✗ %s\n' "$*" >&2; exit 1; }
 jobs_meta() {
   cat <<'EOF'
 digest|run.sh|<dict><key>Minute</key><integer>0</integer></dict><dict><key>Minute</key><integer>30</integer></dict>|*:0/30|*/30 * * * *
-review|review.sh|<dict><key>Minute</key><integer>15</integer></dict><dict><key>Minute</key><integer>45</integer></dict>|*:15/30|15,45 * * * *
+review|review.sh|INTERVAL300|*:0/5|*/5 * * * *
 slackwatch|slack-watch.sh|INTERVAL300|*:0/5|*/5 * * * *
 slacksocket|slack-socket.mjs|DAEMON|DAEMON|DAEMON
 EOF
