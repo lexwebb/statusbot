@@ -11,3 +11,5 @@ repos/
 wt/
 # Local MCP binary.
 ts-tools
+# Node deps for the Socket Mode daemon (slack-socket.mjs); installed by install.sh.
+node_modules/

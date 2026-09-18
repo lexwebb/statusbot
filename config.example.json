@@ -2,6 +2,8 @@
   "_comment": "Copy this file to config.json (which is gitignored) and fill in your own values. config.json is the single source of all instance-specific config — token, org, channels, users, watch list, repos. IDs are Slack channel/user IDs (C… / U…). See README.md for how to obtain each.",
 
   "botToken": "xoxb-REPLACE-WITH-YOUR-SLACK-BOT-TOKEN",
+  "_appTokenNote": "Only needed for the optional Socket Mode daemon (slack-socket.mjs) that fast-tracks @-mention/DM replies. Create an app-level token in your Slack app (scope connections:write), enable Socket Mode, and subscribe the bot to the app_mention and message.im events. Omit to run poll-only.",
+  "appToken": "xapp-REPLACE-WITH-YOUR-SLACK-APP-TOKEN",
   "githubOrg": "your-github-org",
   "githubUser": "your-github-login",
   "ownerName": "Your Name",

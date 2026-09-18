@@ -8,8 +8,9 @@ live in a single gitignored `config.json`.
 | Script | Schedule | What it does |
 |--------|----------|--------------|
 | `run.sh` | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state (`collect.sh`), has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
-| `review.sh` | every 30 min (offset), 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a Slack write-up routed by workstream. Keyed by head SHA: one review per push. |
+| `review.sh` | every 30 min (offset), 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a Slack write-up routed by workstream. Keyed by head SHA: one review per push. Cheap `/notifications` change-gate skips idle passes (a 304 costs no quota). |
 | `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** as the bot (mentions/DMs/questions), or **flag** a code-related issue — investigating it against the repo with a `claude -p` sub-agent and posting the findings to your notify channel. |
+| `slack-socket.mjs` | resident daemon (optional) | Socket Mode WebSocket. On a live @-mention or DM, invokes `slack-watch.sh --once <channel> --respect-hours` for a **seconds-fast** reply instead of waiting up to 5 min for the poll. Reuses all of `slack-watch.sh`'s logic — it's just a faster trigger. Only installed when `config.json` has an `appToken`; the 5-min poll stays as the backstop. |
 
 `collect.sh` is a helper for `run.sh` (prints a plain-text state bundle).
 `lib.sh` is sourced by every script for PATH setup and macOS/Linux `date`/`stat`
@@ -27,8 +28,29 @@ shims. The `*-prompt.md` files are the system prompts; they use `{{OWNER}}` /
 
 `chat:write`, `chat:write.public`, `channels:history`, `groups:history`,
 `im:history`, `im:read`, `users:read`, `app_mentions:read`, `channels:read`,
-`groups:read`. To *read* a channel the bot must be a **member** of it
-(`/invite @your-bot`); `chat:write.public` only covers posting.
+`groups:read`, `channels:join`. To *read* a channel the bot must be a **member**
+of it — `slack-watch.sh` self-joins discovered `feature*` public channels
+(`channels:join`); otherwise `/invite @your-bot`. `chat:write.public` only covers
+posting.
+
+### Socket Mode daemon (optional — faster @-mention/DM replies)
+
+The 5-min poll answers a direct @-mention or DM within ~5 min. For a
+seconds-fast reply, enable the `slack-socket.mjs` daemon:
+
+1. In your Slack app config, turn on **Socket Mode**.
+2. Create an **app-level token** (`xapp-…`) with the `connections:write` scope;
+   put it in `config.json` as `appToken`.
+3. Under **Event Subscriptions → Subscribe to bot events**, add `app_mention`
+   and `message.im` (needs `app_mentions:read` + `im:history`, already listed).
+4. Re-run `./install.sh`. It validates the app token (`apps.connections.open`),
+   runs `npm install` for `@slack/socket-mode`, and installs a `KeepAlive`
+   launchd/systemd daemon. Omit `appToken` to stay poll-only.
+
+The daemon only fast-tracks **direct address** (mentions + DMs). Channel
+watching and the flag/investigate path stay on the poll — deliberately, so the
+daemon can't make the bot chattier, only quicker. The poll is also the backstop:
+if the daemon dies or misses an event, the next poll still handles it.
 
 ## Setup
 

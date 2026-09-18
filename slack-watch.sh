@@ -4,7 +4,11 @@
 # watched channels + the bot's DMs and, per message, either replies as the bot,
 # or flags a code-related issue to the owner after investigating it against the repo.
 #
-# Scheduled by ~/Library/LaunchAgents/me.lex.claude-slack-watch.plist.
+# Scheduled by launchd agent com.<user>.statusbot.slackwatch (every 5 min, the
+# backstop). The com.<user>.statusbot.slacksocket daemon (slack-socket.mjs) also
+# invokes this with `--once <channel> --respect-hours` on a live @-mention/DM for
+# a faster reply; the two share the mkdir lock, so a skipped --once falls back to
+# the 5-min poll.
 #
 #   slack-watch.sh              # normal pass: reply + flag + investigate
 #   slack-watch.sh --dry-run    # classify, print what it WOULD do, send nothing,
@@ -35,11 +39,15 @@ END_HOUR=18           # flag landing at 4am is the wrong time for both.
 
 DRY_RUN=0
 ONLY=""
+RESPECT_HOURS=0        # --once normally ignores the working-hours window (manual
+                       # use); the Socket Mode daemon passes --respect-hours so a
+                       # 2am mention doesn't get an instant out-of-hours reply.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY_RUN=1; shift ;;
-    --once)    ONLY="${2:-}"; shift 2 ;;
-    *)         echo "unknown arg: $1" >&2; exit 2 ;;
+    --dry-run)       DRY_RUN=1; shift ;;
+    --once)          ONLY="${2:-}"; shift 2 ;;
+    --respect-hours) RESPECT_HOURS=1; shift ;;
+    *)               echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -57,8 +65,12 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
+# Working-hours gate. Applies to a normal scheduled pass, and to a daemon-driven
+# --once run only when it asked to respect hours. A manual --once (no flag) still
+# bypasses it. --dry-run always bypasses.
 HOUR=$(date +%H); HOUR=${HOUR#0}
-if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt "$START_HOUR" ] || [ "$HOUR" -ge "$END_HOUR" ]; }; then
+if [ "$DRY_RUN" = "0" ] && { [ -z "$ONLY" ] || [ "$RESPECT_HOURS" = "1" ]; } \
+   && { [ "$HOUR" -lt "$START_HOUR" ] || [ "$HOUR" -ge "$END_HOUR" ]; }; then
   exit 0
 fi
 
