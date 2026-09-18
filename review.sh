@@ -26,6 +26,10 @@ LEDGER="$STATE/reviews.log"      # append-only, epoch-stamped; collect.sh reads
                                  # be cleared and no post can race a review
 REPOS="$DIR/repos"               # bare clone cache, kept between runs
 WORKTREES="$DIR/wt"              # throwaway checkouts, deleted after each review
+NOTIF_CURSOR="$STATE/last-poll"  # GitHub notifications Last-Modified high-water mark:
+                                 # a cheap conditional gate that lets an idle pass
+                                 # exit in one (free, 304) API call instead of the
+                                 # full search + per-PR fan-out.
 
 SLACK_CONFIG="$DIR/config.json"     # all instance config: token, org, routing, users
 ROUTING="$SLACK_CONFIG"             # .channels menu + .users github→slack map live here too
@@ -85,6 +89,44 @@ STALE_BEFORE=$(( NOW - STALE_DAYS * 86400 ))
 HOUR=$(date +%H); HOUR=${HOUR#0}
 if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt 9 ] || [ "$HOUR" -ge 18 ]; }; then
   exit 0
+fi
+
+# --------------------------------------------------- change-signal gate -----
+# Before the unconditional search + per-PR fan-out, ask GitHub's notifications
+# feed whether ANYTHING has happened since our last pass, using a conditional
+# request (If-Modified-Since against a stored Last-Modified). A 304 costs no rate
+# quota and means "nothing changed" → skip the whole pass. A 200 means there's
+# fresh activity → fall through to the normal full scan (the head-SHA gate still
+# prevents re-reviewing unchanged PRs, so we don't try to pin down *which* PR
+# changed here — early-exit-when-idle is the whole win, and the safe one).
+#
+# Only gates scheduled passes: a manual --pr or --dry-run always scans. First run
+# (no cursor) also scans, seeding the cursor. Any API error falls through to a
+# full scan rather than risking a silently-skipped PR.
+# NEW_CURSOR holds the Last-Modified we'll persist — but only in teardown, AFTER
+# the scan runs, so a crashed/locked pass never advances past activity it didn't
+# review. Empty = don't touch the cursor.
+NEW_CURSOR=""
+extract_lm() { grep -i '^last-modified:' | head -1 | sed 's/^[Ll]ast-[Mm]odified: *//; s/\r$//'; }
+if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ]; then
+  if [ -f "$NOTIF_CURSOR" ]; then
+    since=$(cat "$NOTIF_CURSOR")
+    hdrs=$(gh api "/notifications?all=false" -H "If-Modified-Since: $since" --include 2>>"$LOG")
+    rc=$?
+    if [ $rc -ne 0 ] && printf '%s' "$hdrs" | grep -qi '304 Not Modified'; then
+      log "no PR activity since $since — skipping pass (304)"
+      exit 0
+    fi
+    # 200 (or any non-304 outcome, incl. a transient error): scan. On a genuine
+    # 200 we captured a fresh Last-Modified to persist post-scan; on an error
+    # NEW_CURSOR stays empty so the cursor is left as-is and we retry next pass.
+    NEW_CURSOR=$(printf '%s' "$hdrs" | extract_lm)
+    log "activity since $since — scanning"
+  else
+    # First run: seed the cursor from a fresh fetch, then scan normally.
+    NEW_CURSOR=$(gh api "/notifications?all=false" --include 2>>"$LOG" | extract_lm)
+    log "no notifications cursor yet — seeding, scanning this pass"
+  fi
 fi
 
 # ------------------------------------------------------------- candidates ----
@@ -367,6 +409,9 @@ $CANDS
 EOF
 
 wait
+# Advance the notifications cursor only now the scan has completed, so a pass that
+# died mid-flight doesn't 304 past activity it never reviewed.
+[ -n "$NEW_CURSOR" ] && printf '%s' "$NEW_CURSOR" >"$NOTIF_CURSOR"
 for bare in "$REPOS"/*.git; do
   [ -d "$bare" ] && git -C "$bare" worktree prune 2>>"$LOG"
 done
