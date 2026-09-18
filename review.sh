@@ -88,13 +88,9 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 NOW=$(date +%s)
 STALE_BEFORE=$(( NOW - STALE_DAYS * 86400 ))
 
-# Same working-day window as run.sh. A review lands in someone's notifications
-# under the owner's name; 4am is the wrong time for that, and it can wait for 9.
-# A manual --pr or --dry-run ignores the window.
-HOUR=$(date +%H); HOUR=${HOUR#0}
-if [ "$DRY_RUN" = "0" ] && [ -z "$ONLY" ] && { [ "$HOUR" -lt 9 ] || [ "$HOUR" -ge 18 ]; }; then
-  exit 0
-fi
+# No working-hours window: a PR review isn't time-of-day sensitive the way the
+# digest or a chat reply is — reviewing overnight just gets the author feedback
+# sooner. (The digest/slack-watch jobs keep their 9–18 gate.)
 
 # --------------------------------------------------- change-signal gate -----
 # Before the unconditional search + per-PR fan-out, ask GitHub's notifications

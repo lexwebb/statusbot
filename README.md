@@ -8,7 +8,7 @@ live in a single gitignored `config.json`.
 | Script | Schedule | What it does |
 |--------|----------|--------------|
 | `run.sh` | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state (`collect.sh`), has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
-| `review.sh` | every 5 min, 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a one-line verdict routed by workstream. Keyed by head SHA: one review per push. A cheap `/notifications` change-gate makes idle passes nearly free (a 304 costs no quota), so the tight cadence is cheap and recovers fast after a network blip. |
+| `review.sh` | every 5 min, 24/7 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a one-line verdict routed by workstream. Keyed by head SHA: one review per push. A cheap `/notifications` change-gate makes idle passes nearly free (a 304 costs no quota), so the tight cadence is cheap and recovers fast after a network blip. Runs overnight too — a review isn't time-of-day sensitive and the author gets feedback sooner. |
 | `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** (mentions/DMs), **flag** a code issue (investigate + brief you), **ask** (an allowlisted teammate's code question → code-grounded answer in-thread), or **review** (an allowlisted teammate's "review PR X" → runs `review.sh --pr` for it). |
 | `slack-socket.mjs` | resident daemon (optional) | Socket Mode WebSocket. On a live @-mention or DM, invokes `slack-watch.sh --once <channel> --respect-hours` for a **seconds-fast** reply instead of waiting up to 5 min for the poll. Reuses all of `slack-watch.sh`'s logic — it's just a faster trigger. Only installed when `config.json` has an `appToken`; the 5-min poll stays as the backstop. |
 
@@ -114,7 +114,8 @@ run while you're logged out.
 - `slack-watch.sh` seeds a conversation's cursor at "now" on first sighting, so
   it never replies to backlog; it skips the bot's own messages (no loops) and
   caps replies + investigations per pass. Replies are **auto-sent** as the bot.
-- All three run one-at-a-time via a `mkdir` lock and only during working hours.
+- Each runs one-at-a-time via a `mkdir` lock. `run.sh` and `slack-watch.sh` only
+  act 09:00–18:00; `review.sh` runs 24/7 (a review isn't time-of-day sensitive).
 
 Tune caps/models/hours via the constants at the top of each script (or the
 `REVIEW_MODEL` / `SLACK_WATCH_MODEL` / `SLACK_INVESTIGATE_MODEL` env vars).
