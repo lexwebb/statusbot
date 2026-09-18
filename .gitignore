@@ -13,3 +13,5 @@ wt/
 ts-tools
 # Node deps for the Socket Mode daemon (slack-socket.mjs); installed by install.sh.
 node_modules/
+# Serena tool cache (created when an agent indexes this dir).
+.serena/

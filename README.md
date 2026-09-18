@@ -9,7 +9,7 @@ live in a single gitignored `config.json`.
 |--------|----------|--------------|
 | `run.sh` | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state (`collect.sh`), has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
 | `review.sh` | every 30 min (offset), 09:00–18:00 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a Slack write-up routed by workstream. Keyed by head SHA: one review per push. Cheap `/notifications` change-gate skips idle passes (a 304 costs no quota). |
-| `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** as the bot (mentions/DMs/questions), or **flag** a code-related issue — investigating it against the repo with a `claude -p` sub-agent and posting the findings to your notify channel. |
+| `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** (mentions/DMs), **flag** a code issue (investigate + brief you), **ask** (an allowlisted teammate's code question → code-grounded answer in-thread), or **review** (an allowlisted teammate's "review PR X" → runs `review.sh --pr` for it). |
 | `slack-socket.mjs` | resident daemon (optional) | Socket Mode WebSocket. On a live @-mention or DM, invokes `slack-watch.sh --once <channel> --respect-hours` for a **seconds-fast** reply instead of waiting up to 5 min for the poll. Reuses all of `slack-watch.sh`'s logic — it's just a faster trigger. Only installed when `config.json` has an `appToken`; the 5-min poll stays as the backstop. |
 
 `collect.sh` is a helper for `run.sh` (prints a plain-text state bundle).
@@ -51,6 +51,23 @@ The daemon only fast-tracks **direct address** (mentions + DMs). Channel
 watching and the flag/investigate path stay on the poll — deliberately, so the
 daemon can't make the bot chattier, only quicker. The poll is also the backstop:
 if the daemon dies or misses an event, the next poll still handles it.
+
+### On-demand requests (ask / review)
+
+Teammates can direct the bot to act:
+
+- **Ask a code question** — "@bot how does the auth flow work in auth-service?"
+  The bot checks out the repo (read-only, budget-capped) and answers in-thread,
+  grounded in the code.
+- **Review a PR** — "@bot review PR price-comparison-tool#1963" (or paste a PR
+  URL). The bot runs a full review that posts to the GitHub PR **as you** and to
+  the routed Slack channel.
+
+Both are **allowlist-gated**: only people in `config.users` (by Slack user id)
+can invoke them. A request from anyone else is silently ignored (logged, no
+reply). Authorization is enforced in `slack-watch.sh`, not by the classifier —
+a prompt-injected "ignore the rules" message can't act unless its *sender* is on
+the allowlist. `reply`/`flag` are unprivileged and open to anyone as before.
 
 ## Setup
 

@@ -224,6 +224,14 @@ join_channel() { # channel_id — self-join a public channel so we can read it.
   log "join failed for $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"; return 1
 }
 
+# Allowlist: only known teammates may direct the bot to act (ask/review). The
+# roster is config.users' VALUES (slack user ids); the classifier only proposes a
+# privileged disposition — the bash decides here whether the sender is on it, so
+# a prompt-injected "ignore the rules" message can't act unless its author is.
+is_allowed() { # slack_user_id → 0 if allowlisted
+  jq -e --arg u "$1" '.users | to_entries | any(.value == $u)' "$CONFIG" >/dev/null 2>&1
+}
+
 notify_owner() { # text
   if [ "$DRY_RUN" = "1" ]; then printf '  WOULD NOTIFY OWNER:\n%s\n' "$1"; return 0; fi
   local payload
@@ -234,12 +242,16 @@ notify_owner() { # text
     log "notify failed: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"
 }
 
-# --- investigate a flagged issue against the repo ----------------------------
+# --- investigate a flagged issue / answer a code question against the repo ---
 # Detached checkout of the repo's default-branch head, handed to a sub-agent.
-# Read-only: no Edit/Write, no MCP, budget-capped. Findings go to the owner only.
-investigate() { # repo issue_text reporter link
-  local repo="$1" issue="$2" reporter="$3" link="$4"
+# Read-only: no Edit/Write, no MCP, budget-capped. Mode "issue" (default) triages
+# a reported problem; mode "question" answers a directed code question — same
+# checkout + sandbox, only the framing line differs.
+investigate() { # repo issue_text reporter link [mode]
+  local repo="$1" issue="$2" reporter="$3" link="$4" mode="${5:-issue}"
   local bare="$REPOS/$repo.git" wt="$WORKTREES/watch-$repo-$NOW-$RANDOM"
+  local intro="Someone raised this in Slack. Investigate it against this repo ($ORG/$repo)."
+  [ "$mode" = "question" ] && intro="Someone asked this question in Slack. Answer it against this repo ($ORG/$repo), grounded in the code."
 
   if [ ! -d "$bare" ]; then
     gh repo clone "$ORG/$repo" "$bare" -- --bare -q >>"$LOG" 2>&1 || { log "clone $repo failed"; return 1; }
@@ -252,9 +264,9 @@ investigate() { # repo issue_text reporter link
   fi
 
   local findings
-  findings=$(cd "$wt" && claude -p "Someone raised this in Slack. Investigate it against this repo ($ORG/$repo).
+  findings=$(cd "$wt" && claude -p "$intro
 
---- REPORTED BY: $reporter ---
+--- FROM: $reporter ---
 $issue
 --- END ---
 
@@ -347,12 +359,13 @@ $enriched" \
     return 0
   fi
 
-  local d disp ts text reporter link findings repo why to_post
+  local d disp ts text reporter suid link findings repo why to_post num answer
   while IFS= read -r d; do
     disp=$(printf '%s' "$d" | jq -r '.disposition')
     ts=$(printf '%s' "$d" | jq -r '.ts')
     text=$(printf '%s' "$enriched" | jq -r --arg ts "$ts" '.[] | select(.ts==$ts) | .text' | head -c 4000)
     reporter=$(printf '%s' "$enriched" | jq -r --arg ts "$ts" '.[] | select(.ts==$ts) | .name')
+    suid=$(printf '%s' "$enriched" | jq -r --arg ts "$ts" '.[] | select(.ts==$ts) | .user')
     case "$disp" in
       reply)
         send_reply "$conv" "$ts" "$(printf '%s' "$d" | jq -r '.reply // empty')" ;;
@@ -391,6 +404,50 @@ ${link:+<$link|open in Slack> · }repo: \`$repo\`
           notify_owner "⚠️ *Possible issue in $label* by *$reporter* <@${NOTIFY_USER}>
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${investigated:+ (not investigated: $( [ "$investigated" -ge "$MAX_INVESTIGATE" ] && echo cap reached || echo no repo ))}"
+        fi ;;
+      ask)
+        # A directed code question from an allowlisted teammate → answer it,
+        # grounded in the repo, via the same read-only investigate machinery.
+        if ! is_allowed "$suid"; then
+          log "$label: ignoring 'ask' from non-allowlisted $reporter ($suid)"
+        else
+          repo=$(printf '%s' "$d" | jq -r '.repo // empty')
+          if [ -z "$repo" ] || [ "$repo" = "null" ]; then
+            log "$label: 'ask' from $reporter but no repo pinned — skipping"
+          elif [ "$investigated" -ge "$MAX_INVESTIGATE" ]; then
+            log "$label: 'ask' from $reporter but investigate cap reached — skipping this pass"
+          else
+            investigated=$(( investigated + 1 ))
+            log "$label: answering question from $reporter against $repo"
+            link=$(permalink "$conv" "$ts")
+            answer=$(investigate "$repo" "$text" "$reporter" "$link" question)
+            if [ -n "$answer" ]; then
+              to_post=$(reconsider_reply "$conv" "$ts" "$answer")
+              [ -n "$to_post" ] && send_reply "$conv" "$ts" "$to_post"
+            else
+              send_reply "$conv" "$ts" "Sorry — I couldn't work that out from the code just now."
+            fi
+          fi
+        fi ;;
+      review)
+        # On-demand PR review from an allowlisted teammate → fire review.sh --pr
+        # for that PR (backgrounded; it posts to GitHub + the routed channel).
+        if ! is_allowed "$suid"; then
+          log "$label: ignoring 'review' from non-allowlisted $reporter ($suid)"
+        else
+          repo=$(printf '%s' "$d" | jq -r '.repo // empty')
+          num=$(printf '%s' "$d" | jq -r '.num // empty')
+          if ! jq -e --arg r "$repo" '.repos | any(.name == $r)' "$CONFIG" >/dev/null 2>&1; then
+            log "$label: 'review' from $reporter — unknown repo '$repo', skipping"
+            send_reply "$conv" "$ts" "I don't recognise that repo — I can review PRs in: $(jq -r '[.repos[].name] | join(\", \")' "$CONFIG")."
+          elif ! printf '%s' "$num" | grep -qE '^[0-9]+$'; then
+            log "$label: 'review' from $reporter — bad PR number '$num', skipping"
+            send_reply "$conv" "$ts" "I couldn't find a PR number in that — try e.g. \`review $repo#1234\`."
+          else
+            log "$label: on-demand review of $repo#$num requested by $reporter"
+            send_reply "$conv" "$ts" "On it — reviewing \`$repo#$num\`. The review will post to the PR and the usual channel."
+            [ "$DRY_RUN" = "0" ] && ( "$DIR/review.sh" --pr "$repo#$num" >>"$LOG" 2>&1 & )
+          fi
         fi ;;
       *) : ;;  # ignore
     esac
