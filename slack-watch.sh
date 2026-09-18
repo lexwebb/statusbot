@@ -474,7 +474,9 @@ ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${in
         fi ;;
       review)
         # On-demand PR review from an allowlisted teammate → fire review.sh --pr
-        # for that PR (backgrounded; it posts to GitHub + the routed channel).
+        # for that PR (backgrounded). It posts to GitHub + the routed channel, and
+        # --reply-thread sends the verdict back to THIS thread so the asker gets
+        # the answer where they asked, not only in the workstream channel.
         if ! is_allowed "$suid"; then
           log "$label: ignoring 'review' from non-allowlisted $reporter ($suid)"
         else
@@ -488,8 +490,8 @@ ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${in
             send_reply "$conv" "$ts" "I couldn't find a PR number in that — try e.g. \`review $repo#1234\`."
           else
             log "$label: on-demand review of $repo#$num requested by $reporter"
-            send_reply "$conv" "$ts" "On it — reviewing \`$repo#$num\`. The review will post to the PR and the usual channel."
-            [ "$DRY_RUN" = "0" ] && ( "$DIR/review.sh" --pr "$repo#$num" >>"$LOG" 2>&1 & )
+            send_reply "$conv" "$ts" "On it — reviewing \`$repo#$num\`. I'll post the verdict back here, and the full review to the PR."
+            [ "$DRY_RUN" = "0" ] && ( "$DIR/review.sh" --pr "$repo#$num" --reply-thread "$conv:$ts" >>"$LOG" 2>&1 & )
           fi
         fi ;;
       *) : ;;  # ignore

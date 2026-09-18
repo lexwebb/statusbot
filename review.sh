@@ -54,12 +54,17 @@ BOTS="^($(jq -r '.botLogins | join("|")' "$SLACK_CONFIG" 2>/dev/null))(\\[bot\\]
 
 DRY_RUN=0
 ONLY=""
+REPLY_THREAD=""        # <channel>:<ts> — when an on-demand request came from a
+                       # Slack thread, also post the verdict summary back there so
+                       # the asker gets the answer where they asked, not only in
+                       # the routed workstream channel.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY_RUN=1; shift ;;
-    --pr)      ONLY="${2:-}"; shift 2 ;;
-    --max)     MAX_PER_RUN="${2:-}"; shift 2 ;;
-    *)         echo "unknown arg: $1" >&2; exit 2 ;;
+    --dry-run)      DRY_RUN=1; shift ;;
+    --pr)           ONLY="${2:-}"; shift 2 ;;
+    --max)          MAX_PER_RUN="${2:-}"; shift 2 ;;
+    --reply-thread) REPLY_THREAD="${2:-}"; shift 2 ;;
+    *)              echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -349,6 +354,23 @@ $menu" \
     slack_post "$slack_channel" "$summary" "$slug" "$verb"
   else
     log "$slug: skipped verdict — nothing to announce"
+  fi
+
+  # If this review was requested from a Slack thread (--reply-thread ch:ts), post
+  # the verdict back there too, so the person who asked gets the answer where they
+  # asked — not only in the routed workstream channel. Detail is on the PR (linked).
+  if [ -n "$REPLY_THREAD" ] && [ "$DRY_RUN" = "0" ]; then
+    local rt_ch="${REPLY_THREAD%%:*}" rt_ts="${REPLY_THREAD#*:}" rtext="$summary"
+    printf '%s' "$verdict" | grep -q '^VERDICT|skipped' && \
+      rtext="$emoji *<$url|$slug>* — skipped: ${clause:-no review posted}"
+    local rtoken; rtoken=$(jq -r '.botToken // empty' "$SLACK_CONFIG")
+    curl -sS -X POST https://slack.com/api/chat.postMessage \
+      -H "Authorization: Bearer $rtoken" -H "Content-Type: application/json; charset=utf-8" \
+      --data "$(jq -n --arg ch "$rt_ch" --arg ts "$rt_ts" --arg t "$rtext" \
+        '{channel:$ch, thread_ts:$ts, text:$t, unfurl_links:false, unfurl_media:false}')" \
+      >/dev/null 2>>"$LOG" \
+      && log "$slug: posted verdict back to requesting thread $rt_ch/$rt_ts" \
+      || log "$slug: failed to post to requesting thread $rt_ch/$rt_ts"
   fi
 
   # Only a posted review advances the SHA. A failed one is retried next pass.
