@@ -214,6 +214,35 @@ send_reply() { # channel thread_ts text
   log "reply failed in $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"; return 1
 }
 
+# Team principle: post a short summary as the top-line reply, and the full detail
+# as a further reply in the same thread just beneath it. Splits its input on a
+# ---DETAIL--- line; if the marker is absent, the whole thing is treated as the
+# summary (never dump undelimited detail into the channel top-line). Both posts
+# thread under the original message ($2). Counts as one against the reply cap.
+post_summary_detail() { # channel thread_ts text
+  local summary detail
+  if printf '%s' "$3" | grep -q '^---DETAIL---$'; then
+    summary=$(printf '%s' "$3" | sed '/^---DETAIL---$/,$d')
+    detail=$(printf '%s' "$3" | sed '1,/^---DETAIL---$/d')
+  else
+    summary="$3"; detail=""
+  fi
+  # Trim leading/trailing blank lines from each part.
+  summary=$(printf '%s' "$summary" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}' 2>/dev/null)
+  send_reply "$1" "$2" "$summary" || return 1
+  # The detail follows in the same thread. It does not consume another cap slot —
+  # a summary without its detail is worse than useless, so if the summary posted,
+  # the detail always follows (posted directly, bypassing the cap check).
+  if [ -n "$(printf '%s' "$detail" | tr -d '[:space:]')" ] && [ "$DRY_RUN" = "0" ]; then
+    api_post chat.postMessage "$(jq -n --arg ch "$1" --arg ts "$2" --arg t "$detail" \
+      '{channel:$ch, thread_ts:$ts, text:$t, unfurl_links:false, unfurl_media:false}')"
+    [ "$(jq -r '.ok // false' "$TMP/resp" 2>/dev/null)" = "true" ] || \
+      log "detail post failed in $1: $(jq -r '.error // .' "$TMP/resp" 2>/dev/null)"
+  elif [ -n "$detail" ] && [ "$DRY_RUN" = "1" ]; then
+    printf '  WOULD POST DETAIL in %s:\n    %s\n' "$1" "$detail"
+  fi
+}
+
 join_channel() { # channel_id — self-join a public channel so we can read it.
   # Idempotent: joining a channel we're already in returns ok. Public only.
   [ "$DRY_RUN" = "1" ] && { printf '  WOULD JOIN %s\n' "$1"; return 0; }
@@ -385,7 +414,15 @@ $enriched" \
             # The thread may have been triaged by a human while we investigated.
             # Decide whether chiming in still helps before posting.
             to_post=$(reconsider_reply "$conv" "$ts" "$findings")
-            [ -n "$to_post" ] && send_reply "$conv" "$ts" "$to_post"
+            if [ -n "$to_post" ]; then
+              # Unchanged full answer → summary top-line + threaded detail. A
+              # revision (no ---DETAIL--- marker) is already short → post as-is.
+              if printf '%s' "$to_post" | grep -q '^---DETAIL---$'; then
+                post_summary_detail "$conv" "$ts" "$to_post"
+              else
+                send_reply "$conv" "$ts" "$to_post"
+              fi
+            fi
             notify_owner "🔎 *Issue raised in $label* by *$reporter* (FYI, no action needed)
 > $(printf '%s' "$text" | head -c 500)
 ${link:+<$link|open in Slack> · }repo: \`$repo\`
@@ -423,7 +460,13 @@ ${link:+<$link|open in Slack> · }${why:+_${why}_ · }repo: ${repo:-unclear}${in
             answer=$(investigate "$repo" "$text" "$reporter" "$link" question)
             if [ -n "$answer" ]; then
               to_post=$(reconsider_reply "$conv" "$ts" "$answer")
-              [ -n "$to_post" ] && send_reply "$conv" "$ts" "$to_post"
+              if [ -n "$to_post" ]; then
+                if printf '%s' "$to_post" | grep -q '^---DETAIL---$'; then
+                  post_summary_detail "$conv" "$ts" "$to_post"
+                else
+                  send_reply "$conv" "$ts" "$to_post"
+                fi
+              fi
             else
               send_reply "$conv" "$ts" "Sorry — I couldn't work that out from the code just now."
             fi

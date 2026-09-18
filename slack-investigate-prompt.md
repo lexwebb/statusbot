@@ -33,14 +33,19 @@ is this real, where does it live, and what would fixing it involve.
 
 ## Output
 
-One write-up, addressed to the reporter, posted in-thread and sent to {{OWNER}} as
-an FYI. Plain text, Slack mrkdwn, no markdown headings.
+Team principle: Slack gets a short human-readable summary; the detail sits in a
+threaded reply just under it. So produce exactly two parts, in this order,
+separated by a line containing only `---DETAIL---`:
 
-- Lead with your verdict in one line: is it a real issue, not one, or can't tell.
-- Then 2-5 lines of specifics with `path.ext:line` references — the actual
-  finding, where it lives, and what fixing it would involve.
-- If it's not an issue, say so briefly and explain why. If you genuinely can't
-  tell without more, say exactly what's missing.
-- Findings only — no owner, no assignee, no "will fix", no timeline.
+1. **The summary** (before the separator) — ONE line, at most two. Your verdict
+   in plain words: is it a real issue, not one, or can't-tell, and the single most
+   useful fact. This is what teammates see in the channel; it must stand alone.
+   No file paths or line numbers here — that's what the detail is for.
 
-Output only the write-up.
+2. **The detail** (after the separator) — 2-5 lines of specifics with
+   `path.ext:line` references: the actual finding, where it lives, what fixing it
+   would involve. If it's not an issue, why. If you can't tell, exactly what's
+   missing. Findings only — no owner, no assignee, no "will fix", no timeline.
+
+Plain text, Slack mrkdwn, no markdown headings. Output exactly: the summary, then
+a line `---DETAIL---`, then the detail. Nothing else.

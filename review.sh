@@ -334,11 +334,21 @@ $menu" \
     return 0
   fi
 
-  # A skipped review posted nothing to GitHub, so it has nothing to announce.
-  if [ -n "$slack_text" ] && ! printf '%s' "$verdict" | grep -q '^VERDICT|skipped'; then
-    slack_post "$slack_channel" "$slack_text" "$slug" "$verb"
+  # Team principle: Slack gets a short human-readable summary, not the write-up —
+  # the full review lives on the GitHub PR, so we link there. One or two lines:
+  # the verdict, a one-line reason, and the PR link. (The sub-agent's SLACK block
+  # is no longer posted; $slack_text is ignored on purpose.)
+  local emoji summary
+  case "$verb" in
+    approved)         emoji=":white_check_mark:" ;;
+    request-changes)  emoji=":warning:" ;;
+    *)                emoji=":speech_balloon:" ;;
+  esac
+  summary="$emoji *<$url|$slug>* — $verb${clause:+: $clause}"
+  if ! printf '%s' "$verdict" | grep -q '^VERDICT|skipped'; then
+    slack_post "$slack_channel" "$summary" "$slug" "$verb"
   else
-    log "$slug: no slack write-up posted (skipped verdict or empty SLACK block)"
+    log "$slug: skipped verdict — nothing to announce"
   fi
 
   # Only a posted review advances the SHA. A failed one is retried next pass.
