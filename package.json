@@ -1,11 +1,23 @@
 {
-  "name": "statusbot-slack-socket",
-  "version": "1.0.0",
+  "name": "statusbot",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Socket Mode daemon that fast-tracks direct-address Slack replies to slack-watch.sh",
-  "bin": { "statusbot-slack-socket": "slack-socket.mjs" },
+  "description": "Keeps one person on top of their team's GitHub + Slack, and acts on their behalf. TypeScript rewrite of the original bash suite.",
+  "scripts": {
+    "digest": "tsx src/bin/digest.ts",
+    "review": "tsx src/bin/review.ts",
+    "slack-watch": "tsx src/bin/slack-watch.ts",
+    "socket": "tsx src/bin/socket.ts",
+    "install": "tsx src/install.ts",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@slack/socket-mode": "^2.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
   }
 }
