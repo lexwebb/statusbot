@@ -1,1 +1,0 @@
-prompts/slack-reconsider-prompt.md

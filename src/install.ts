@@ -202,7 +202,11 @@ function installCron(wantDaemon: boolean): void {
 }
 
 function pathValue(): string {
-  return `${join(homedir(), ".nvm", "versions", "node")}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
+  // The dir holding the running node binary (e.g. ~/.nvm/versions/node/vX/bin) —
+  // the tsx shim is `#!/usr/bin/env node`, so this MUST be on PATH under launchd's
+  // bare environment. Derive it from execPath rather than guessing the nvm layout.
+  const nodeBin = join(process.execPath, "..");
+  return `${nodeBin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
 }
 function writePathEnv(): void {
   // Kept for parity/debugging; the plist sets PATH directly via EnvironmentVariables.

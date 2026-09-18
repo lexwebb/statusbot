@@ -1,26 +1,32 @@
 # statusbot
 
-Three cooperating cron-style jobs that use the Claude CLI to keep one person on
-top of their team's GitHub + Slack, and to act on their behalf. Each is a plain
-bash script scheduled by a macOS launchd agent; all instance-specific settings
-live in a single gitignored `config.json`.
+Four cooperating jobs that use the Claude CLI to keep one person on top of their
+team's GitHub + Slack, and to act on their behalf. **TypeScript** (Node 22, run via
+`tsx`), scheduled by a macOS launchd agent (or systemd/cron on Linux); all
+instance-specific settings live in a single gitignored `config.json`.
 
-| Script | Schedule | What it does |
+| Job (`npm run …` / entrypoint) | Schedule | What it does |
 |--------|----------|--------------|
-| `run.sh` | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state (`collect.sh`), has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
-| `review.sh` | every 5 min, 24/7 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a one-line verdict routed by workstream. Keyed by head SHA: one review per push. A cheap `/notifications` change-gate makes idle passes nearly free (a 304 costs no quota), so the tight cadence is cheap and recovers fast after a network blip. Runs overnight too — a review isn't time-of-day sensitive and the author gets feedback sooner. |
-| `slack-watch.sh` | every 5 min, 09:00–18:00 | Reads new messages in the watched channels + the bot's DMs. Per message: **reply** (mentions/DMs), **flag** a code issue (investigate + brief you), **ask** (an allowlisted teammate's code question → code-grounded answer in-thread), or **review** (an allowlisted teammate's "review PR X" → runs `review.sh --pr` for it). |
-| `slack-socket.mjs` | resident daemon (optional) | Socket Mode WebSocket. On a live @-mention or DM, invokes `slack-watch.sh --once <channel> --respect-hours` for a **seconds-fast** reply instead of waiting up to 5 min for the poll. Reuses all of `slack-watch.sh`'s logic — it's just a faster trigger. Only installed when `config.json` has an `appToken`; the 5-min poll stays as the backstop. |
+| `digest` (`src/bin/digest.ts`) | every 30 min, 09:00–18:00 | Collects recent GitHub/Slack state, has `claude -p` write a short digest, posts it to your Slack notify channel. First run each day is a fuller "morning brief". |
+| `review` (`src/bin/review.ts`) | every 5 min, 24/7 | Finds open org PRs that aren't yours and that no human has engaged, checks each out into a throwaway worktree, and a `claude -p` sub-agent posts a review **to GitHub as you**, plus a one-line verdict routed by workstream. Keyed by head SHA: one review per push. A cheap `/notifications` change-gate makes idle passes nearly free (a 304 costs no quota). Runs overnight too — a review isn't time-of-day sensitive. |
+| `slack-watch` (`src/bin/slack-watch.ts`) | every 5 min, 09:00–18:00 | Reads new messages in the watched + auto-discovered `feature*` channels and the bot's DMs. Per message: **reply** (mentions/DMs), **flag** a code issue (investigate + brief you), **ask** (an allowlisted teammate's code question → code-grounded answer in-thread), or **review** (an allowlisted teammate's "review PR X" → runs the review job for it). Short summaries in-channel, detail in-thread. |
+| `socket` (`src/bin/socket.ts`) | resident daemon (optional) | Socket Mode WebSocket. On a live @-mention or DM, invokes `slack-watch --once <channel> --respect-hours` for a **seconds-fast** reply instead of waiting up to 5 min for the poll. Only installed when `config.json` has an `appToken`; the 5-min poll stays as the backstop. |
 
-`collect.sh` is a helper for `run.sh` (prints a plain-text state bundle).
-`lib.sh` is sourced by every script for PATH setup and macOS/Linux `date`/`stat`
-shims. The `*-prompt.md` files are the system prompts; they use `{{OWNER}}` /
-`{{GITHUB_USER}}` placeholders that the scripts fill from config at runtime.
+**Structure:** `src/lib/` is the shared foundation (config, slack, github, claude,
+state, time, prompts, log); `src/jobs/` holds the four jobs (+ `collect.ts`, the
+digest's state-bundle builder); `src/bin/` are thin argv entrypoints; `src/install.ts`
+is the installer. Prompts live in `prompts/` (`*-prompt.md`), with `{{OWNER}}` /
+`{{GITHUB_USER}}` placeholders filled from config at runtime.
+
+`config.json` and everything under `state/` are unchanged from the original bash
+suite — this rewrite reads the same files, so nothing reset on cutover.
 
 ## Requirements
 
+- **Node 22+** (the whole suite; `tsx` runs the TypeScript directly — no build step).
 - **macOS** (launchd) or **Linux** (systemd user timers, or cron). Windows via WSL.
-- `bash`, `jq`, `perl`, `git`, `curl`, and the GitHub `gh` CLI (`gh auth login`).
+- `git` and the GitHub `gh` CLI (`gh auth login`) — the only external CLIs the jobs
+  shell out to, besides `claude`. (No `jq`/`perl`/`curl` — all native now.)
 - The **Claude CLI** (`claude`), logged in — this is what does the reasoning.
 - A **Slack app / bot** in your workspace with a bot token (`xoxb-…`).
 
@@ -43,7 +49,7 @@ seconds-fast reply, enable the `slack-socket.mjs` daemon:
    put it in `config.json` as `appToken`.
 3. Under **Event Subscriptions → Subscribe to bot events**, add `app_mention`
    and `message.im` (needs `app_mentions:read` + `im:history`, already listed).
-4. Re-run `./install.sh`. It validates the app token (`apps.connections.open`),
+4. Re-run `npm run setup`. It validates the app token (`apps.connections.open`),
    runs `npm install` for `@slack/socket-mode`, and installs a `KeepAlive`
    launchd/systemd daemon. Omit `appToken` to stay poll-only.
 
@@ -75,16 +81,16 @@ the allowlist. `reply`/`flag` are unprivileged and open to anyone as before.
    the field notes below.
 2. Invite the bot to every channel you list under `watch` and to any channel in
    the review routing `channels` map.
-3. Run **`./install.sh`**. It checks prerequisites, validates config, writes
+3. Run **`npm install && npm run setup`**. It checks prerequisites, validates config, writes
    `path.env` (the tool dirs the schedulers need), sanity-checks the Slack token
    and channel membership, then installs and starts the schedulers:
    - macOS → three launchd agents in `~/Library/LaunchAgents/`
    - Linux → three systemd user timers (or crontab lines if systemd is absent)
 
-   Re-run any time after editing config. `./install.sh --no-schedule` validates
-   without touching the scheduler; `./install.sh --uninstall` removes it.
-4. Smoke-test: `./run.sh --dry-run`, `./review.sh --dry-run --pr owner-repo#123`,
-   `./slack-watch.sh --dry-run`.
+   Re-run any time after editing config. `npm run setup -- --no-schedule` validates
+   without touching the scheduler; `npm run setup -- --uninstall` removes it.
+4. Smoke-test: `npm run digest -- --dry-run`, `npm run review -- --dry-run --pr owner-repo#123`,
+   `npm run slack-watch -- --dry-run`.
 
 On Linux, add `sudo loginctl enable-linger $(whoami)` if you want the timers to
 run while you're logged out.

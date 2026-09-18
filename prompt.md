@@ -1,1 +1,0 @@
-prompts/digest-prompt.md
